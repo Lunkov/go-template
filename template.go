@@ -30,13 +30,16 @@ import (
 
 type HTTPTemplate struct {
   TemplPath          string
+
   templates          map[string]*template.Template
+  muTemplates        sync.RWMutex
+
   templatesAddons    map[string]*template.Template
+  muTemplatesAddons  sync.RWMutex
+
   Translate         *tr.Tr
   minifyRender      *minify.M
   watcherFiles      *watcher.Watcher
-  mu                 sync.RWMutex
-  mua                sync.RWMutex
 }
 
 func NewHTTPTemplates(templPath string, translate *tr.Tr, enableWatcher bool, enableMinify bool) *HTTPTemplate {
@@ -101,12 +104,13 @@ func NewHTTPTemplates(templPath string, translate *tr.Tr, enableWatcher bool, en
 }
 
 func (p *HTTPTemplate) Clear() {
-  p.mu.Lock()
-  p.mua.Lock()
+  p.muTemplates.Lock()
   p.templates = make(map[string]*template.Template)
+  p.muTemplates.Unlock()
+
+  p.muTemplatesAddons.Lock()
   p.templatesAddons = make(map[string]*template.Template)
-  p.mu.Unlock()
-  p.mua.Unlock()
+  p.muTemplatesAddons.Unlock()
 }
 
 func (p *HTTPTemplate) FuncMap(lang string) template.FuncMap {
@@ -168,9 +172,9 @@ func (p *HTTPTemplate) GetTemplate(path string, lang string) (*template.Template
     return nil, false
   }
   index := p.makeIndex(filename, lang)
-  p.mu.RLock()
+  p.muTemplates.RLock()
   i, ok := p.templates[index]
-  p.mu.RUnlock()
+  p.muTemplates.RUnlock()
   if ok {
     return i, true
   }
@@ -180,9 +184,9 @@ func (p *HTTPTemplate) GetTemplate(path string, lang string) (*template.Template
   } 
   t = p.appendBaseTemplate(t, p.TemplPath + "/base", lang)
   t = p.appendBaseTemplate(t, p.TemplPath + "/components", lang)
-  p.mu.Lock()
+  p.muTemplates.Lock()
   p.templates[index] = t
-  p.mu.Unlock()
+  p.muTemplates.Unlock()
   return t, true
 }
 
@@ -222,9 +226,9 @@ func (p *HTTPTemplate) appendBaseTemplate(t *template.Template, path string, lan
       }
 
       index := p.makeIndex(filename, lang)
-      p.mua.RLock()
+      p.muTemplatesAddons.RLock()
       t_base, ok := p.templatesAddons[index]
-      p.mua.RUnlock()
+      p.muTemplatesAddons.RUnlock()
       if !ok {
         t_base, ok = p.loadTemplateFromFile(filename, lang)
         if !ok {
@@ -234,9 +238,9 @@ func (p *HTTPTemplate) appendBaseTemplate(t *template.Template, path string, lan
         if glog.V(9) {
           glog.Infof("DBG: Append Template Addon: %s", t_base.Name())
         }
-        p.mua.Lock()
+        p.muTemplatesAddons.Lock()
         p.templatesAddons[index] = t_base
-        p.mua.Unlock()
+        p.muTemplatesAddons.Unlock()
       }
       count ++
       t.AddParseTree(t_base.Name(), t_base.Tree)
@@ -268,9 +272,9 @@ func (p *HTTPTemplate) LoadTemplates(path string, lang string) {
         glog.Infof("LOG: Loading template: %s", filename)
       }
       index := p.makeIndex(filename, lang)
-      p.mu.RLock()
+      p.muTemplates.RLock()
       t_base, ok := p.templates[index]
-      p.mua.RUnlock()
+      p.muTemplates.RUnlock()
       if !ok {
         t_base, ok = p.loadTemplateFromFile(filename, lang)
         if !ok {
@@ -278,9 +282,9 @@ func (p *HTTPTemplate) LoadTemplates(path string, lang string) {
           return nil
         }
         p.MakeTrMap(t_base, lang)
-        p.mua.Lock()
+        p.muTemplates.Lock()
         p.templates[index] = t_base
-        p.mua.Unlock()
+        p.muTemplates.Unlock()
       }
       count ++
     }
