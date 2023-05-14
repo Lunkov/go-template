@@ -1,12 +1,13 @@
 package template
 
 import (
+  "os"
   "strings"
   "fmt"
-  "os"
   "errors"
   "io/ioutil"
   "path/filepath"
+  "github.com/yargevad/filepathx"
   "crypto/md5"
   "encoding/hex"
   "time"
@@ -31,11 +32,15 @@ import (
 type HTTPTemplate struct {
   TemplPath          string
 
-  templates          map[string]*template.Template
+  // Templates HTML
+  // Index is Filename
+  templates          map[string]string
   muTemplates        sync.RWMutex
 
-  templatesAddons    map[string]*template.Template
-  muTemplatesAddons  sync.RWMutex
+  // Renders of tempates with links and languages
+  // Index is Filename + Language
+  renders            map[string]*template.Template
+  muRenders          sync.RWMutex
 
   Translate         *tr.Tr
   minifyRender      *minify.M
@@ -93,7 +98,7 @@ func NewHTTPTemplates(templPath string, translate *tr.Tr, enableWatcher bool, en
         glog.Infof("DBG: WATCH FILE: %s: %s\n", path, f.Name())
       }
     }
-	  go func() {
+    go func() {
       if err := p.watcherFiles.Start(time.Millisecond * 100); err != nil {
         glog.Fatalf("ERR: Watcher Start: %v", err)
       }
@@ -105,12 +110,12 @@ func NewHTTPTemplates(templPath string, translate *tr.Tr, enableWatcher bool, en
 
 func (p *HTTPTemplate) Clear() {
   p.muTemplates.Lock()
-  p.templates = make(map[string]*template.Template)
+  p.templates = make(map[string]string)
   p.muTemplates.Unlock()
 
-  p.muTemplatesAddons.Lock()
-  p.templatesAddons = make(map[string]*template.Template)
-  p.muTemplatesAddons.Unlock()
+  p.muRenders.Lock()
+  p.renders = make(map[string]*template.Template)
+  p.muRenders.Unlock()
 }
 
 func (p *HTTPTemplate) FuncMap(lang string) template.FuncMap {
@@ -172,22 +177,58 @@ func (p *HTTPTemplate) GetTemplate(path string, lang string) (*template.Template
     return nil, false
   }
   index := p.makeIndex(filename, lang)
-  p.muTemplates.RLock()
-  i, ok := p.templates[index]
-  p.muTemplates.RUnlock()
+  p.muRenders.RLock()
+  i, ok := p.renders[index]
+  p.muRenders.RUnlock()
   if ok {
     return i, true
   }
-  t, okt := p.loadTemplateFromFile(filename, lang)
-  if !okt {
+  p.muTemplates.RLock()
+  content, ok := p.templates[filename]
+  p.muTemplates.RUnlock()
+  if !ok {
+    glog.Errorf("ERR: GetTemplate(%s): not found", filename)
     return nil, false
-  } 
-  t = p.appendBaseTemplate(t, p.TemplPath + "/base", lang)
-  t = p.appendBaseTemplate(t, p.TemplPath + "/components", lang)
-  p.muTemplates.Lock()
-  p.templates[index] = t
-  p.muTemplates.Unlock()
-  return t, true
+  }
+
+  t_base := template.New(p.fileNameWithoutExtension(filename))
+  if t_base == nil {
+    glog.Errorf("ERR: New Template(%s)", filename)
+    return nil, false
+  }
+  t_base, err = t_base.Funcs(p.FuncMap(lang)).Parse(p.makeMimiHTML(content))
+  if err != nil {
+    glog.Errorf("ERR: Parse Template(%s): %v", filename, err)
+    if glog.V(9) {
+      glog.Infof("DBG: ERROR: Parse Template(%s) html=%s", filename, content)
+    }
+    return nil, false
+  }
+
+  p.muTemplates.RLock()
+  for file_addon, body_addon := range p.templates {
+    if file_addon != filename {
+      t_addon := template.New(p.fileNameWithoutExtension(file_addon))
+      if t_base == nil {
+        glog.Errorf("ERR: New Template(%s)", file_addon)
+        continue
+      }
+      t_addon, err = t_addon.Funcs(p.FuncMap(lang)).Parse(p.makeMimiHTML(body_addon))
+      if err != nil {
+        glog.Errorf("ERR: Parse Template(%s): %v", file_addon, err)
+        continue
+      }
+      t_base.AddParseTree(t_addon.Name(), t_addon.Tree)
+    }
+  }
+  p.MakeTrMap(t_base, lang)
+  p.muTemplates.RUnlock()
+  
+
+  p.muRenders.Lock()
+  p.renders[index] = t_base
+  p.muRenders.Unlock()
+  return t_base, true
 }
 
 func (p *HTTPTemplate) MakeTrMap(t *template.Template, lang string) map[string]string {
@@ -209,54 +250,7 @@ func (p *HTTPTemplate) makeIndex(fileName string, lang string) string {
   return hex.EncodeToString(hasher.Sum(nil))
 }
 
-func (p *HTTPTemplate) appendBaseTemplate(t *template.Template, path string, lang string) *template.Template {
-  scanPath, err := filepath.Abs(path)
-  if err != nil {
-    glog.Errorf("ERR: Get AbsPath(%s): %v", scanPath, err)
-    return nil
-  }
-  if glog.V(9) {
-    glog.Infof("DBG: Scan Templates(%s)", scanPath)
-  }
-  count := 0
-  errScan := filepath.Walk(scanPath, func(filename string, f os.FileInfo, err error) error {
-    if f != nil && f.IsDir() == false {
-      if glog.V(2) {
-        glog.Infof("LOG: Loading template(%s) file: %s\n", path, filename)
-      }
-
-      index := p.makeIndex(filename, lang)
-      p.muTemplatesAddons.RLock()
-      t_base, ok := p.templatesAddons[index]
-      p.muTemplatesAddons.RUnlock()
-      if !ok {
-        t_base, ok = p.loadTemplateFromFile(filename, lang)
-        if !ok {
-          return nil
-        }
-        p.MakeTrMap(t_base, lang)
-        if glog.V(9) {
-          glog.Infof("DBG: Append Template Addon: %s", t_base.Name())
-        }
-        p.muTemplatesAddons.Lock()
-        p.templatesAddons[index] = t_base
-        p.muTemplatesAddons.Unlock()
-      }
-      count ++
-      t.AddParseTree(t_base.Name(), t_base.Tree)
-    }
-    return nil
-  })
-  if glog.V(9) {
-    glog.Infof("DBG: Scan Path: %s, Templates: %d", scanPath, count)
-  }
-  if errScan != nil {
-    glog.Errorf("ERR: %s\n", errScan)
-  }
-  return t
-}
-
-func (p *HTTPTemplate) LoadTemplates(path string, lang string) {
+func (p *HTTPTemplate) LoadTemplates(path string) {
   scanPath, err := filepath.Abs(path)
   if err != nil {
     glog.Errorf("ERR: Get AbsPath(%s): %v", scanPath, err)
@@ -266,35 +260,37 @@ func (p *HTTPTemplate) LoadTemplates(path string, lang string) {
     glog.Infof("DBG: Scan Templates(%s)", scanPath)
   }
   count := 0
-  errScan := filepath.Walk(scanPath, func(filename string, f os.FileInfo, err error) error {
-    if f != nil && f.IsDir() == false {
-      if glog.V(2) {
-        glog.Infof("LOG: Loading template: %s", filename)
-      }
-      index := p.makeIndex(filename, lang)
-      p.muTemplates.RLock()
-      t_base, ok := p.templates[index]
-      p.muTemplates.RUnlock()
-      if !ok {
-        t_base, ok = p.loadTemplateFromFile(filename, lang)
-        if !ok {
-          glog.Errorf("ERR: Get Template(%s)", filename)
-          return nil
-        }
-        p.MakeTrMap(t_base, lang)
-        p.muTemplates.Lock()
-        p.templates[index] = t_base
-        p.muTemplates.Unlock()
-      }
-      count ++
+  files, err := filepathx.Glob(scanPath + "/**/")
+  for _, filename := range files {
+    fileInfo, err := os.Stat(filename)
+    if err != nil {
+      glog.Errorf("ERR: Get Template(%s): %v", filename, err)
+      continue
     }
-    return nil
-  })
+    if fileInfo.IsDir() {
+      continue
+    }
+    if glog.V(2) {
+      glog.Infof("LOG: Loading template: %s", filename)
+    }
+    p.muTemplates.RLock()
+    t_base, ok := p.templates[filename]
+    p.muTemplates.RUnlock()
+    if !ok {
+      t_base, ok = p.loadTemplateFromFile(filename)
+      if !ok {
+        glog.Errorf("ERR: Get Template(%s)", filename)
+        continue
+      }
+      // p.MakeTrMap(t_base, lang)
+      p.muTemplates.Lock()
+      p.templates[filename] = t_base
+      p.muTemplates.Unlock()
+    }
+    count ++
+  }
   if glog.V(9) {
     glog.Infof("DBG: Scan Path: %s, Templates: %d", scanPath, count)
-  }
-  if errScan != nil {
-    glog.Errorf("ERR: %s\n", errScan)
   }
 }
 
@@ -389,20 +385,14 @@ func (p *HTTPTemplate) fileNameWithoutExtension(fileName string) string {
   return strings.TrimSuffix(filepath.Base(fileName), filepath.Ext(fileName))
 }
 
-func (p *HTTPTemplate) loadTemplateFromFile(filename string, lang string) (*template.Template, bool) {
+func (p *HTTPTemplate) loadTemplateFromFile(filename string) (string, bool) {
+  if glog.V(9) {
+    glog.Infof("DBG: Load Template(%s)", filename)
+  }
   contents, err := ioutil.ReadFile(filename)
   if err != nil {
     glog.Errorf("ERR: Get Template(%s): %v", filename, err)
-    return nil, false
+    return "", false
   }
-  t_base := template.New(p.fileNameWithoutExtension(filename)).Funcs(p.FuncMap(lang))
-  t_base, err = t_base.Parse(p.makeMimiHTML(string(contents)))
-  if err != nil {
-    glog.Errorf("ERR: Parse Template(%s): %v", filename, err)
-    if glog.V(9) {
-      glog.Infof("DBG: ERROR: Parse Template(%s) html=%s", filename, string(contents))
-    }
-    return nil, false
-  }
-  return t_base, true
+  return string(contents), true
 }

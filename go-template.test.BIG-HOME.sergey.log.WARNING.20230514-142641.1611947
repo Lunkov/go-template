@@ -1,0 +1,4 @@
+Log file created at: 2023/05/14 14:26:41
+Running on machine: BIG-HOME
+Binary: Built with gc go1.20.3 for linux/amd64
+Log line format: [IWEF]mmdd hh:mm:ss.uuuuuu threadid file:line] msg

@@ -8,6 +8,7 @@ require (
 	github.com/radovskyb/watcher v1.0.7
 	github.com/stretchr/testify v1.6.1
 	github.com/tdewolff/minify/v2 v2.12.4
+	github.com/yargevad/filepathx v1.0.0
 )
 
 require (
