@@ -169,6 +169,19 @@ func argsfn(kvs ...interface{}) (map[string]interface{}, error) {
   return m, nil
 }
 
+func (p *HTTPTemplate) TemplateExists(path string) (bool) {
+  filen := fmt.Sprintf("%s/%s.html", p.TemplPath, path)
+  filename, err := filepath.Abs(filen)
+  if err != nil {
+    glog.Errorf("ERR: Get AbsPath(%s): %v", filen, err)
+    return false
+  }
+  if _, err := os.Stat(filename); errors.Is(err, os.ErrNotExist) {
+    return false
+  }
+  return true
+}
+
 func (p *HTTPTemplate) GetTemplate(path string, lang string) (*template.Template, bool) {
   filen := fmt.Sprintf("%s/%s.html", p.TemplPath, path)
   filename, err := filepath.Abs(filen)

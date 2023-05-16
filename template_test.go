@@ -63,6 +63,10 @@ func TestCheckTemplateMini(t *testing.T) {
   templates := NewHTTPTemplates("templates/", translate, false, true)
   templates.LoadTemplates("templates/")  
 
+  // Template Exists 
+  assert.False(t, templates.TemplateExists("index111"))
+  assert.True(t, templates.TemplateExists("index"))
+
   // Public templates
   tmplProp, ok := templates.GetTemplate("index111", "ru_RU")
   assert.Nil(t, tmplProp)
