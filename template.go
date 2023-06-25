@@ -5,7 +5,6 @@ import (
   "strings"
   "fmt"
   "errors"
-  "io/ioutil"
   "path/filepath"
   "github.com/yargevad/filepathx"
   "crypto/md5"
@@ -402,7 +401,7 @@ func (p *HTTPTemplate) loadTemplateFromFile(filename string) (string, bool) {
   if glog.V(9) {
     glog.Infof("DBG: Load Template(%s)", filename)
   }
-  contents, err := ioutil.ReadFile(filename)
+  contents, err := os.ReadFile(filename)
   if err != nil {
     glog.Errorf("ERR: Get Template(%s): %v", filename, err)
     return "", false
